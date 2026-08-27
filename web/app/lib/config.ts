@@ -77,9 +77,9 @@ export const UI_CONFIG = {
  * Block time configuration
  */
 export const BLOCK_TIME = {
-  AVERAGE_BLOCK_TIME: 10 * 60, // 10 minutes in seconds
-  BLOCKS_PER_DAY: 144,
-  BLOCKS_PER_HOUR: 6,
+  AVERAGE_BLOCK_TIME: 5, // 5 seconds
+  BLOCKS_PER_DAY: 17280,
+  BLOCKS_PER_HOUR: 720,
 } as const;
 
 /**

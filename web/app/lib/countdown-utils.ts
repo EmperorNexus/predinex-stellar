@@ -7,8 +7,8 @@
  * `market-utils.ts`, keeping every block→time estimate in the UI consistent.
  */
 
-/** Average seconds per block (~10 min on Stacks), mirrors `market-utils.ts`. */
-export const BLOCK_TIME_SECONDS = 600;
+/** Average seconds per block (~5 sec on Stellar), mirrors `market-utils.ts`. */
+export const BLOCK_TIME_SECONDS = 5;
 
 /** Below this many seconds remaining the countdown is treated as urgent. */
 export const URGENT_THRESHOLD_SECONDS = 60 * 60; // 1 hour
