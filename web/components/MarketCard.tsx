@@ -208,7 +208,7 @@ export default function MarketCard({ market }: MarketCardProps) {
             <div className="flex items-center gap-1 text-muted-foreground shrink-0">
               <CountdownTimer
                 secondsRemaining={
-                  market.status === 'expired' ? null : blocksToSeconds(market.timeRemaining)
+                  market.status === 'expired' ? 0 : blocksToSeconds(market.timeRemaining)
                 }
                 settled={market.status === 'settled'}
                 showIcon

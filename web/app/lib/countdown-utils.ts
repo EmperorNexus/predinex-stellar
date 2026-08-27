@@ -48,7 +48,8 @@ export function isUrgent(secondsRemaining: number | null): boolean {
  * @returns The formatted countdown, or "Expired" once time has run out.
  */
 export function formatCountdown(secondsRemaining: number | null): string {
-  if (secondsRemaining === null || secondsRemaining <= 0) return 'Expired';
+  if (secondsRemaining === null) return '--';
+  if (secondsRemaining <= 0) return 'Expired';
 
   const total = Math.floor(secondsRemaining);
   const days = Math.floor(total / SECONDS_PER_DAY);
@@ -70,7 +71,8 @@ export function formatCountdown(secondsRemaining: number | null): string {
  *          remaining", or "Expired".
  */
 export function formatCountdownAccessible(secondsRemaining: number | null): string {
-  if (secondsRemaining === null || secondsRemaining <= 0) return 'Expired';
+  if (secondsRemaining === null) return 'Loading time remaining';
+  if (secondsRemaining <= 0) return 'Expired';
 
   const total = Math.floor(secondsRemaining);
   const days = Math.floor(total / SECONDS_PER_DAY);
