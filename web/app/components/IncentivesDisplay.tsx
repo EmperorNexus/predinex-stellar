@@ -77,6 +77,7 @@ async function calculateRealIncentives(userAddress: string, poolId: number): Pro
       1,
       totalVolume / 1_000_000,
       previousBetsCount,
+      false, // isReferred
       DEFAULT_INCENTIVE_CONFIG
     );
     
