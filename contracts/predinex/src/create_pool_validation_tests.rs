@@ -13,7 +13,11 @@ fn setup() -> (Env, PredinexContractClient<'static>) {
     let token_id = env.register_stellar_asset_contract_v2(admin.clone());
     let contract_id = env.register(PredinexContract, ());
     let client: PredinexContractClient<'static> = PredinexContractClient::new(&env, &contract_id);
-    client.initialize(&token_id.address(), &admin, &admin);
+    let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    client.initialize(&token, &admin, &admin);
     (env, client)
 }
 
