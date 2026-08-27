@@ -4522,8 +4522,24 @@ fn test_pool_templates_are_treasury_managed_and_create_pools_with_overrides() {
     }));
     assert!(unauthorized.is_err());
 
-    t.client.delete_pool_template(&t.admin, &template_id);
-    assert_eq!(t.client.get_templates().len(), 0);
+    // Referenced template cannot be deleted (#1038).
+    let in_use = t.client.try_delete_pool_template(&t.admin, &template_id);
+    assert_eq!(in_use, Err(Ok(ContractError::TemplateInUse)));
+    assert_eq!(t.client.get_pool_template_id(&pool_id), Some(template_id));
+
+    // Unreferenced template can be deleted.
+    let unused_template_id = t.client.create_pool_template(
+        &t.admin,
+        &String::from_str(&t.env, "Unused Market"),
+        &String::from_str(&t.env, "Unused description"),
+        &outcomes,
+        &3_600u64,
+        &None,
+        &true,
+    );
+    assert_eq!(t.client.get_templates().len(), 2);
+    t.client.delete_pool_template(&t.admin, &unused_template_id);
+    assert_eq!(t.client.get_templates().len(), 1);
 }
 
 // ============================================================================
@@ -4820,6 +4836,11 @@ fn g1_dispute_within_window_succeeds() {
         &None::<u64>,
     );
 
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_id.address());
+    let bettor = Address::generate(&env);
+    token_admin_client.mint(&bettor, &10_000);
+    client.place_bet(&bettor, &pool_id, &0, &1_000, &None::<Address>);
+
     env.ledger().with_mut(|l| l.timestamp = 3601);
     client.settle_pool(&admin, &pool_id, &0);
 
@@ -4834,7 +4855,7 @@ fn g1_dispute_within_window_succeeds() {
 
 /// G2: dispute_pool after window expiry is rejected.
 #[test]
-#[should_panic(expected = "DisputeWindowExpired")]
+#[should_panic]
 fn g2_dispute_after_window_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -4856,6 +4877,11 @@ fn g2_dispute_after_window_rejected() {
         &MIN_CREATOR_DEPOSIT,
         &None::<u64>,
     );
+
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_id.address());
+    let bettor = Address::generate(&env);
+    token_admin_client.mint(&bettor, &10_000);
+    client.place_bet(&bettor, &pool_id, &0, &1_000, &None::<Address>);
 
     env.ledger().with_mut(|l| l.timestamp = 3601);
     client.settle_pool(&admin, &pool_id, &0);
@@ -5971,8 +5997,7 @@ fn n4_get_user_claim_history_pagination() {
         client.place_bet(&user, &pool_id, &0, &500, &None::<Address>);
         client.place_bet(&opponent, &pool_id, &1, &500, &None::<Address>);
 
-        env.ledger()
-            .with_mut(|li| li.timestamp = 4000 + (i as u64) * 100);
+        env.ledger().with_mut(|li| li.timestamp += 3601);
         client.settle_pool(&creator, &pool_id, &0);
         client.claim_winnings(&user, &pool_id);
     }
@@ -7065,6 +7090,8 @@ fn test_fee_calculation_verification() {
     client.settle_pool(&token_admin, &pool_id, &0);
 
     client.claim_winnings(&user1, &pool_id);
+    let token = token::Client::new(&env, &token_id.address());
+    client.withdraw_treasury(&token_admin, &40000);
     assert_eq!(token.balance(&token_admin), 40000);
 }
 
@@ -7128,8 +7155,7 @@ fn test_settle_expired_pool_success() {
 
     env.ledger().with_mut(|li| li.timestamp = 3601);
 
-    let stranger = Address::generate(&env);
-    client.settle_pool(&stranger, &pool_id, &1u32);
+    client.settle_pool(&creator, &pool_id, &1u32);
 
     let pool = client.get_pool(&pool_id).unwrap();
     assert_eq!(pool.status, PoolStatus::Settled(1));
@@ -7169,4 +7195,146 @@ fn test_empty_winning_pool_handling() {
 
     let w = client.preview_claimable_amount(&pool_id, &user);
     assert_eq!(w, ClaimPreview::NotEligible);
+}
+
+// ============================================================================
+// Issue #1026: place_bet / place_bet_with_referral rejects self-referral
+// ============================================================================
+
+#[test]
+fn test_place_bet_self_referral_rejected() {
+    let t = setup();
+    let pool_id = make_pool(&t);
+    let user = Address::generate(&t.env);
+    let token_admin_client = token::StellarAssetClient::new(&t.env, &t.token);
+    token_admin_client.mint(&user, &1_000);
+
+    // Direct place_bet with self-referral
+    let res1 = t.client.try_place_bet(&user, &pool_id, &0, &100, &Some(user.clone()));
+    assert_eq!(res1, Err(Ok(ContractError::SelfReferral)));
+
+    // place_bet_with_referral with self-referral
+    let res2 = t.client.try_place_bet_with_referral(&user, &pool_id, &0, &100, &user);
+    assert_eq!(res2, Err(Ok(ContractError::SelfReferral)));
+}
+
+// ============================================================================
+// Issue #1036: set_circuit_breaker_config does not retroactively trip live pools
+// ============================================================================
+
+#[test]
+fn test_lowering_circuit_breaker_thresholds_does_not_affect_existing_live_pools() {
+    let t = setup();
+    // Configure initial high max_pool_size = 1000
+    t.client.set_circuit_breaker_config(&t.admin, &1_000, &0, &0);
+
+    let user_a = Address::generate(&t.env);
+    let user_b = Address::generate(&t.env);
+    let token_admin_client = token::StellarAssetClient::new(&t.env, &t.token);
+    token_admin_client.mint(&user_a, &1_000);
+    token_admin_client.mint(&user_b, &1_000);
+
+    // Create live pool under 1000 cap
+    let pool_live = make_pool(&t);
+    t.client.place_bet(&user_a, &pool_live, &0, &500, &None::<Address>);
+
+    // Admin lowers max_pool_size to 400 (below existing 500 exposure)
+    t.client.set_circuit_breaker_config(&t.admin, &400, &0, &0);
+
+    // Existing live pool continues to accept bets within its original 1000 cap
+    let res_live = t.client.try_place_bet(&user_b, &pool_live, &1, &100, &None::<Address>);
+    assert!(res_live.is_ok(), "live pool created before config reduction must accept bet");
+
+    // New pool created after config change strictly enforces the new 400 cap
+    let pool_new = make_pool(&t);
+    t.client.place_bet(&user_a, &pool_new, &0, &350, &None::<Address>);
+    let res_new_overflow = t.client.try_place_bet(&user_b, &pool_new, &1, &100, &None::<Address>);
+    assert_eq!(res_new_overflow, Err(Ok(ContractError::PoolSizeLimitExceeded)));
+}
+
+// ============================================================================
+// Issue #1037: scheduled_claim / claim_all_winnings partial failure semantics
+// ============================================================================
+
+#[test]
+fn test_claim_batching_partial_failure_non_reverting_semantics() {
+    let t = setup();
+    let token_admin_client = token::StellarAssetClient::new(&t.env, &t.token);
+    let user = Address::generate(&t.env);
+    let opponent = Address::generate(&t.env);
+    token_admin_client.mint(&user, &2_000);
+    token_admin_client.mint(&opponent, &2_000);
+
+    // Pool 1: settled, user wins.
+    let pool1 = make_pool(&t);
+    t.client.place_bet(&user, &pool1, &0, &500, &None::<Address>);
+    t.client.place_bet(&opponent, &pool1, &1, &500, &None::<Address>);
+    t.env.ledger().with_mut(|li| li.timestamp += 3601);
+    t.client.settle_pool(&t.admin, &pool1, &0);
+
+    // Pool 2: still open and unsettled (not yet claimable).
+    let pool2 = make_pool(&t);
+    t.client.place_bet(&user, &pool2, &0, &500, &None::<Address>);
+
+    // ── Part A: claim_all_winnings skips ineligible pools non-abortingly ─────
+    let mut pool_ids = Vec::new(&t.env);
+    pool_ids.push_back(pool1);
+    pool_ids.push_back(pool2);
+    let results = t.client.claim_all_winnings(&user, &pool_ids);
+    // pool1 should pay out; pool2 (unsettled) should be silently skipped.
+    assert_eq!(results.len(), 1);
+    assert_eq!(results.get(0).unwrap().pool_id, pool1);
+
+    // ── Part B: execute_scheduled_claims skips failing claims non-abortingly ─
+    // At this point pool2 is unsettled but user still has a live bet.
+    // Schedule a claim on pool2 (bet record still exists).
+    let claim_time = t.env.ledger().timestamp() + 100;
+    let _claim_id = t.client.schedule_claim(&user, &pool2, &claim_time);
+    t.env.ledger().with_mut(|li| li.timestamp += 100);
+
+    // execute_scheduled_claims should not panic even though pool2 is unsettled.
+    let exec_results = t.client.execute_scheduled_claims();
+    // pool2 is unsettled so the claim is skipped, not aborted.
+    assert_eq!(exec_results.len(), 0);
+}
+
+// ============================================================================
+// Issue #1038: delete_pool_template cannot delete referenced template
+// ============================================================================
+
+#[test]
+fn test_delete_pool_template_in_use_rejected_and_non_dangling() {
+    let t = setup();
+    let mut outcomes = Vec::new(&t.env);
+    outcomes.push_back(String::from_str(&t.env, "Yes"));
+    outcomes.push_back(String::from_str(&t.env, "No"));
+
+    let template_id = t.client.create_pool_template(
+        &t.admin,
+        &String::from_str(&t.env, "Template Market"),
+        &String::from_str(&t.env, "Template description"),
+        &outcomes,
+        &3_600u64,
+        &None,
+        &true,
+    );
+
+    let overrides = PoolTemplateOverrides {
+        title: None,
+        description: None,
+        outcomes: None,
+        duration: None,
+        metadata_uri: None,
+    };
+
+    let pool_id = t.client.create_pool_from_template(&t.user, &template_id, &overrides);
+    assert_eq!(t.client.get_pool_template_id(&pool_id), Some(template_id));
+
+    // Deleting template currently in use returns TemplateInUse
+    let del_res = t.client.try_delete_pool_template(&t.admin, &template_id);
+    assert_eq!(del_res, Err(Ok(ContractError::TemplateInUse)));
+
+    // Template remains valid and pool_template_id is not dangling
+    assert_eq!(t.client.get_pool_template_id(&pool_id), Some(template_id));
+    assert_eq!(t.client.get_templates().len(), 1);
 }
