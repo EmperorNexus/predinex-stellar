@@ -173,7 +173,7 @@ const DEFAULT_MIN_SETTLEMENT_PARTICIPANTS: u32 = 1;
 /// #151 — Minimum pool lifetime in seconds (matches `web/docs/POOL_DURATION.md`).
 const MIN_POOL_DURATION_SECS: u64 = 300;
 /// #151 — Maximum pool lifetime in seconds (matches web validators / tests).
-const MAX_POOL_DURATION_SECS: u64 = 1_000_000;
+const MAX_POOL_DURATION_SECS: u64 = 31_536_000;
 
 /// #154 — Maximum length for pool title in bytes.
 const MAX_TITLE_LENGTH: u32 = 100;

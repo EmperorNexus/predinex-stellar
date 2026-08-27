@@ -5,6 +5,7 @@
 import { openContractCall } from '@stacks/connect';
 import type { Finished } from '@stacks/connect';
 import { uintCV, stringAsciiCV } from '@stacks/transactions';
+import { scValToNative } from '@stellar/stellar-sdk';
 import { getRuntimeConfig } from '../runtime-config';
 import { callContract } from '../../../lib/appkit-transactions';
 import { SorobanTransactionService, TxStage } from '../soroban-transaction-service';
@@ -258,7 +259,7 @@ export const predinexContract = {
     winningOutcome: number;
     onStageChange?: (stage: TxStage) => void;
     onFeeEstimated?: (feeStroops: string) => Promise<boolean>;
-  }): Promise<{ txHash: string }> {
+  }): Promise<{ txHash: string; winningOutcome?: number }> {
     const { soroban } = getRuntimeConfig();
     const service = getSorobanService();
 
@@ -274,6 +275,24 @@ export const predinexContract = {
       throw new Error(result.error || 'Transaction failed');
     }
 
-    return { txHash: result.txHash };
+    // Report success/outcome from the real on-chain result only. The pre-submit
+    // simulation (`simulatedResults`) is stale once the transaction is mined and
+    // must never be used to report the settled outcome. If the actual return
+    // value cannot be decoded we fail loudly instead of silently reporting a
+    // fabricated outcome.
+    let decodedWinningOutcome: number | undefined;
+    if (result.returnValue !== undefined) {
+      try {
+        decodedWinningOutcome = Number(scValToNative(result.returnValue));
+      } catch (error) {
+        throw new Error(
+          `Settlement confirmed on-chain but its result could not be decoded: ${
+            error instanceof Error ? error.message : 'decode error'
+          }`
+        );
+      }
+    }
+
+    return { txHash: result.txHash, winningOutcome: decodedWinningOutcome };
   },
 };

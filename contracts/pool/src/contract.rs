@@ -25,7 +25,7 @@ use soroban_sdk::{
 };
 
 /// Maximum total duration of a pool since creation (1,000,000 seconds).
-const MAX_POOL_DURATION_SECS: u64 = 1_000_000;
+const MAX_POOL_DURATION_SECS: u64 = 31_536_000;
 
 /// Event topic for pool duration extension.
 const POOL_DURATION_EXTENDED: Symbol = symbol_short!("dur_ext");
