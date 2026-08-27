@@ -316,6 +316,8 @@ const MAX_WEBHOOK_URL_LENGTH: u32 = 512;
 
 /// #151 — Minimum pool lifetime in seconds (matches `web/docs/POOL_DURATION.md`).
 const MIN_POOL_DURATION_SECS: u64 = 300;
+/// #151 — Maximum pool lifetime in seconds (matches web validators / tests).
+const MAX_POOL_DURATION_SECS: u64 = 31_536_000;
 /// #570 — Maximum pool lifetime in seconds (~1 year).
 const MAX_POOL_DURATION_SECS: u64 = 31_536_000;
 /// Maximum duration a single `extend_pool_duration` call may add (30 days).
