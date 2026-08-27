@@ -6,6 +6,7 @@ import { getRuntimeConfig } from '../runtime-config';
 import { SorobanTransactionService, TxStage } from '../soroban-transaction-service';
 import { FreighterWalletClient } from '../freighter-adapter';
 import { scValToNative } from '@stellar/stellar-sdk';
+import { invalidateOnPlaceBet, invalidateOnClaimWinnings } from '../cache-invalidation';
 
 let sorobanService: SorobanTransactionService | null = null;
 
@@ -189,6 +190,14 @@ export const predinexContract = {
       throw new Error(result.error || 'Transaction failed');
     }
 
+    // Issue #990: the pool detail page's manual fetchPool/fetchUserBet polling
+    // and the market list/activity caches all go stale until the invalidation
+    // policy already defined in cache-invalidation.ts actually runs — it was
+    // never called from anywhere.
+    if (params.wallet.address) {
+      invalidateOnPlaceBet({ poolId: params.poolId, userAddress: params.wallet.address });
+    }
+
     return { txHash: result.txHash };
   },
 
@@ -261,6 +270,11 @@ export const predinexContract = {
 
     if (result.status === 'FAILED') {
       throw new Error(result.error || 'Transaction failed');
+    }
+
+    // See the matching note in placeBetSoroban above (issue #990).
+    if (params.wallet.address) {
+      invalidateOnClaimWinnings({ poolId: params.poolId, userAddress: params.wallet.address });
     }
 
     return { txHash: result.txHash };
