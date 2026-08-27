@@ -2,6 +2,7 @@
 extern crate std;
 use super::*;
 use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
+use std::format;
 
 // ── Deterministic pseudo-random number generator ─────────────────────────────
 struct Lcg(u64);
@@ -70,11 +71,9 @@ fn setup_test() -> TestEnv<'static> {
     let token_id = env.register_stellar_asset_contract_v2(admin.clone());
 
     let contract_id = env.register(PredinexContract, ());
-    let client = PredinexContractClient::new(&env, &contract_id);
+    let client: PredinexContractClient<'static> = PredinexContractClient::new(&env, &contract_id);
 
-    client.initialize(&token_id.address(), &admin);
-
-    let client: PredinexContractClient<'static> = unsafe { core::mem::transmute(client) };
+    client.initialize(&token_id.address(), &admin, &admin);
 
     TestEnv { env, client, admin }
 }
@@ -102,8 +101,14 @@ fn v1_test_title_validation() {
             &outcome_a,
             &outcome_b,
             &3600,
+            &MIN_CREATOR_DEPOSIT,
+            &None::<u64>,
         );
-        assert!(result.is_ok(), "Valid title should be accepted: {:?}", title);
+        assert!(
+            result.is_ok(),
+            "Valid title should be accepted: {:?}",
+            title
+        );
     }
 
     // 2. Title too long
@@ -115,6 +120,8 @@ fn v1_test_title_validation() {
         &String::from_str(&t.env, "A"),
         &String::from_str(&t.env, "B"),
         &3600,
+        &MIN_CREATOR_DEPOSIT,
+        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(ContractError::TitleTooLong)));
 
@@ -127,6 +134,8 @@ fn v1_test_title_validation() {
         &String::from_str(&t.env, "A"),
         &String::from_str(&t.env, "B"),
         &3600,
+        &MIN_CREATOR_DEPOSIT,
+        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(ContractError::TitleEmpty)));
 
@@ -140,6 +149,8 @@ fn v1_test_title_validation() {
             &String::from_str(&t.env, "A"),
             &String::from_str(&t.env, "B"),
             &3600,
+            &MIN_CREATOR_DEPOSIT,
+            &None::<u64>,
         );
         assert_eq!(result, Err(Ok(ContractError::StringWhitespaceOnly)));
     }
@@ -166,6 +177,8 @@ fn v2_test_description_validation() {
             &outcome_a,
             &outcome_b,
             &3600,
+            &MIN_CREATOR_DEPOSIT,
+            &None::<u64>,
         );
         assert!(result.is_ok(), "Valid description should be accepted");
     }
@@ -179,6 +192,8 @@ fn v2_test_description_validation() {
         &String::from_str(&t.env, "A"),
         &String::from_str(&t.env, "B"),
         &3600,
+        &MIN_CREATOR_DEPOSIT,
+        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(ContractError::DescriptionTooLong)));
 
@@ -191,6 +206,8 @@ fn v2_test_description_validation() {
         &String::from_str(&t.env, "A"),
         &String::from_str(&t.env, "B"),
         &3600,
+        &MIN_CREATOR_DEPOSIT,
+        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(ContractError::DescriptionEmpty)));
 
@@ -204,6 +221,8 @@ fn v2_test_description_validation() {
             &String::from_str(&t.env, "A"),
             &String::from_str(&t.env, "B"),
             &3600,
+            &MIN_CREATOR_DEPOSIT,
+            &None::<u64>,
         );
         assert_eq!(result, Err(Ok(ContractError::StringWhitespaceOnly)));
     }
@@ -220,7 +239,7 @@ fn v3_test_outcomes_validation() {
         let count = rng.next_range(MIN_OUTCOME_COUNT as u64, MAX_OUTCOME_COUNT as u64) as u32;
         let mut outcomes = Vec::new(&t.env);
         for i in 0..count {
-            outcomes.push_back(String::from_str(&t.env, &std::format!("Outcome {}", i)));
+            outcomes.push_back(String::from_str(&t.env, &format!("Outcome {}", i)));
         }
 
         let result = t.client.try_create_multi_outcome_pool(
@@ -250,7 +269,7 @@ fn v3_test_outcomes_validation() {
     // 3. Too many outcomes
     let mut many_outcomes = Vec::new(&t.env);
     for i in 0..(MAX_OUTCOME_COUNT + 1) {
-        many_outcomes.push_back(String::from_str(&t.env, &std::format!("Outcome {}", i)));
+        many_outcomes.push_back(String::from_str(&t.env, &format!("Outcome {}", i)));
     }
     let result = t.client.try_create_multi_outcome_pool(
         &t.admin,
@@ -260,7 +279,7 @@ fn v3_test_outcomes_validation() {
         &3600,
         &None,
     );
-    assert_eq!(result, Err(Ok(ContractError::InvalidOutcome)));
+    assert_eq!(result, Err(Ok(ContractError::TooManyOutcomes)));
 
     // 4. Outcome label too long
     let mut long_outcome = Vec::new(&t.env);
@@ -383,6 +402,8 @@ fn v5_test_duration_validation() {
         &String::from_str(&t.env, "A"),
         &String::from_str(&t.env, "B"),
         &(MIN_POOL_DURATION_SECS - 1),
+        &MIN_CREATOR_DEPOSIT,
+        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(ContractError::DurationTooShort)));
 
@@ -394,6 +415,8 @@ fn v5_test_duration_validation() {
         &String::from_str(&t.env, "A"),
         &String::from_str(&t.env, "B"),
         &(MAX_POOL_DURATION_SECS + 1),
+        &MIN_CREATOR_DEPOSIT,
+        &None::<u64>,
     );
     assert_eq!(result, Err(Ok(ContractError::DurationTooLong)));
 
@@ -405,6 +428,8 @@ fn v5_test_duration_validation() {
         &String::from_str(&t.env, "A"),
         &String::from_str(&t.env, "B"),
         &MIN_POOL_DURATION_SECS,
+        &MIN_CREATOR_DEPOSIT,
+        &None::<u64>,
     );
     assert!(result.is_ok());
 
@@ -416,6 +441,8 @@ fn v5_test_duration_validation() {
         &String::from_str(&t.env, "A"),
         &String::from_str(&t.env, "B"),
         &MAX_POOL_DURATION_SECS,
+        &MIN_CREATOR_DEPOSIT,
+        &None::<u64>,
     );
     assert!(result.is_ok());
 
@@ -429,6 +456,8 @@ fn v5_test_duration_validation() {
             &String::from_str(&t.env, "A"),
             &String::from_str(&t.env, "B"),
             &duration,
+            &MIN_CREATOR_DEPOSIT,
+            &None::<u64>,
         );
         assert!(result.is_ok(), "Duration {} should be accepted", duration);
     }
@@ -439,7 +468,10 @@ fn v5_test_duration_validation() {
 fn v6_test_metadata_uri_validation() {
     let t = setup_test();
 
-    let outcomes = Vec::from_array(&t.env, [String::from_str(&t.env, "A"), String::from_str(&t.env, "B")]);
+    let outcomes = Vec::from_array(
+        &t.env,
+        [String::from_str(&t.env, "A"), String::from_str(&t.env, "B")],
+    );
 
     // 1. Valid prefixes
     let valid_prefixes: &[&[u8]] = &[b"https://", b"ipfs://", b"ar://"];
@@ -457,7 +489,11 @@ fn v6_test_metadata_uri_validation() {
             &3600,
             &Some(uri),
         );
-        assert!(result.is_ok(), "Valid prefix {:?} should be accepted", std::str::from_utf8(prefix));
+        assert!(
+            result.is_ok(),
+            "Valid prefix {:?} should be accepted",
+            std::str::from_utf8(prefix)
+        );
     }
 
     // 2. Invalid prefix

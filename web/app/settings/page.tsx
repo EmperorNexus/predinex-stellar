@@ -2,11 +2,15 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState, type ElementType, type ReactNode } from 'react';
-import Navbar from '../components/Navbar';
-import { useWallet } from '../components/WalletAdapterProvider';
-import { getMarkets, getUserActivity, type Pool, type ActivityItem } from '../lib/stacks-api';
+import Navbar from '@/components/Navbar';
+import { useWallet } from '@/components/WalletAdapterProvider';
+import { getMarkets } from '../lib/soroban-read-api';
+import { predinexReadApi } from '../lib/adapters/predinex-read-api';
+import type { Pool, ActivityItem } from '../lib/market-types';
 import { useI18n, supportedLanguages, type AppLanguage } from '../lib/i18n';
 import { useBrowserNotifications } from '../lib/notifications';
+import { useNotificationPreferences } from '../lib/hooks/useNotificationPreferences';
+import RouteErrorBoundary from '../../components/RouteErrorBoundary';
 import { exportRecords } from '../lib/export';
 import { Bell, Download, Languages, LoaderCircle, FileDown, Globe2, ChevronRight } from 'lucide-react';
 
@@ -49,7 +53,8 @@ function SettingsCard({
 export default function SettingsPage() {
   const { address, isConnected } = useWallet();
   const { language, setLanguage, t } = useI18n();
-  const notifications = useBrowserNotifications();
+  const { preferences } = useNotificationPreferences();
+  const notifications = useBrowserNotifications({ userId: address, preferences });
   const [pools, setPools] = useState<Pool[]>([]);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -64,7 +69,7 @@ export default function SettingsPage() {
       try {
         const [marketData, activityData] = await Promise.all([
           getMarkets('all'),
-          address ? getUserActivity(address, 25) : Promise.resolve([]),
+          address ? predinexReadApi.getUserActivity(address, 25) : Promise.resolve([]),
         ]);
 
         if (!active) return;
@@ -147,6 +152,7 @@ export default function SettingsPage() {
     <main className="min-h-screen bg-background text-foreground">
       <Navbar />
 
+      <RouteErrorBoundary routeName="Settings">
       <div className="mx-auto max-w-7xl px-4 pb-16 pt-24 sm:px-6 lg:px-8">
         <div className="mb-8 flex flex-col gap-3">
           <div className="inline-flex items-center gap-2 text-sm font-medium text-primary">
@@ -186,13 +192,15 @@ export default function SettingsPage() {
                     {notifications.enabled ? t('settings.notificationsOn') : t('settings.notificationsOff')}
                   </p>
                   <p className="text-xs text-muted-foreground">{notifications.permission}</p>
+                  {notifications.error && <p className="text-xs text-red-400">{notifications.error}</p>}
                 </div>
                 <button
                   type="button"
                   onClick={() => notifications.setEnabled(!notifications.enabled)}
+                  disabled={notifications.permission === 'denied' || notifications.supportStatus === 'unsupported'}
                   className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
                     notifications.enabled ? 'bg-green-500/15 text-green-400' : 'bg-muted/50 text-muted-foreground'
-                  }`}
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   {notifications.enabled ? 'On' : 'Off'}
                 </button>
@@ -210,7 +218,8 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   onClick={() => void requestNotifications()}
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                  disabled={notifications.permission === 'denied' || notifications.supportStatus === 'unsupported'}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {t('settings.requestPermission')}
                 </button>
@@ -277,6 +286,7 @@ export default function SettingsPage() {
           </SettingsCard>
         </div>
       </div>
+      </RouteErrorBoundary>
     </main>
   );
 }

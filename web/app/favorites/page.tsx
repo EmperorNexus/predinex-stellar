@@ -2,9 +2,9 @@
 
 import { useMemo, useEffect, useState } from 'react';
 import Link from 'next/link';
-import Navbar from "../components/Navbar";
+import Navbar from '@/components/Navbar';
 import { StatsCard } from '@/components/ui/StatsCard';
-import MarketGrid from "../components/MarketGrid";
+import MarketGrid from '@/components/MarketGrid';
 import { usePoolFavorites } from "../lib/hooks/usePoolFavorites";
 import { useMarketDiscovery } from "../lib/hooks/useMarketDiscovery";
 import RouteErrorBoundary from "../../components/RouteErrorBoundary";
@@ -87,7 +87,7 @@ function FavoritesContent() {
         {/* Markets Grid */}
         {!isLoading && favoritePoolIds.length > 0 && (
           <>
-            <MarketGrid markets={displayMarkets} isLoading={isLoading} />
+            <MarketGrid markets={displayMarkets} isLoading={isLoading} error={null} onRetry={() => {}} />
 
             {error && (
               <div className="mt-6 p-4 rounded-xl border border-red-500/20 bg-red-500/5">

@@ -4,6 +4,9 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { createScopedLogger } from '@/app/lib/logger';
+
+const log = createScopedLogger('useLocalStorage');
 
 /**
  * Hook for managing local storage
@@ -11,19 +14,23 @@ import { useState, useEffect, useCallback } from 'react';
  * @param initialValue Initial value if not in storage
  * @returns Value and setter function
  */
-export function useLocalStorage<T>(key: string, initialValue: T) {
+export function useLocalStorage<T>(
+  key: string,
+  initialValue: T,
+  migrate?: (value: unknown) => T
+) {
   const [storedValue, setStoredValue] = useState<T>(() => {
     try {
-      // Get from local storage by key
       const item = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
 
       if (item) {
-        return JSON.parse(item);
+        const parsed = JSON.parse(item);
+        return migrate ? migrate(parsed) : parsed;
       }
 
       return initialValue;
     } catch (error) {
-      console.error(`Error reading from localStorage for key "${key}":`, error);
+      log.error(`Error reading from localStorage for key "${key}":`, error);
       return initialValue;
     }
   });
@@ -44,7 +51,7 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
           window.localStorage.setItem(key, JSON.stringify(valueToStore));
         }
       } catch (error) {
-        console.error(`Error writing to localStorage for key "${key}":`, error);
+        log.error(`Error writing to localStorage for key "${key}":`, error);
       }
     },
     [key, storedValue]
@@ -58,7 +65,7 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
         window.localStorage.removeItem(key);
       }
     } catch (error) {
-      console.error(`Error removing from localStorage for key "${key}":`, error);
+      log.error(`Error removing from localStorage for key "${key}":`, error);
     }
   }, [key, initialValue]);
 
@@ -82,7 +89,7 @@ export function useSessionStorage<T>(key: string, initialValue: T) {
 
       return initialValue;
     } catch (error) {
-      console.error(`Error reading from sessionStorage for key "${key}":`, error);
+      log.error(`Error reading from sessionStorage for key "${key}":`, error);
       return initialValue;
     }
   });
@@ -98,7 +105,7 @@ export function useSessionStorage<T>(key: string, initialValue: T) {
           window.sessionStorage.setItem(key, JSON.stringify(valueToStore));
         }
       } catch (error) {
-        console.error(`Error writing to sessionStorage for key "${key}":`, error);
+        log.error(`Error writing to sessionStorage for key "${key}":`, error);
       }
     },
     [key, storedValue]
@@ -111,7 +118,7 @@ export function useSessionStorage<T>(key: string, initialValue: T) {
         window.sessionStorage.removeItem(key);
       }
     } catch (error) {
-      console.error(`Error removing from sessionStorage for key "${key}":`, error);
+      log.error(`Error removing from sessionStorage for key "${key}":`, error);
     }
   }, [key, initialValue]);
 
