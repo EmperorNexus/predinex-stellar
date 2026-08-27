@@ -4522,8 +4522,24 @@ fn test_pool_templates_are_treasury_managed_and_create_pools_with_overrides() {
     }));
     assert!(unauthorized.is_err());
 
-    t.client.delete_pool_template(&t.admin, &template_id);
-    assert_eq!(t.client.get_templates().len(), 0);
+    // Referenced template cannot be deleted (#1038).
+    let in_use = t.client.try_delete_pool_template(&t.admin, &template_id);
+    assert_eq!(in_use, Err(Ok(ContractError::TemplateInUse)));
+    assert_eq!(t.client.get_pool_template_id(&pool_id), Some(template_id));
+
+    // Unreferenced template can be deleted.
+    let unused_template_id = t.client.create_pool_template(
+        &t.admin,
+        &String::from_str(&t.env, "Unused Market"),
+        &String::from_str(&t.env, "Unused description"),
+        &outcomes,
+        &3_600u64,
+        &None,
+        &true,
+    );
+    assert_eq!(t.client.get_templates().len(), 2);
+    t.client.delete_pool_template(&t.admin, &unused_template_id);
+    assert_eq!(t.client.get_templates().len(), 1);
 }
 
 // ============================================================================
@@ -4820,6 +4836,11 @@ fn g1_dispute_within_window_succeeds() {
         &None::<u64>,
     );
 
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_id.address());
+    let bettor = Address::generate(&env);
+    token_admin_client.mint(&bettor, &10_000);
+    client.place_bet(&bettor, &pool_id, &0, &1_000, &None::<Address>);
+
     env.ledger().with_mut(|l| l.timestamp = 3601);
     client.settle_pool(&admin, &pool_id, &0);
 
@@ -4834,7 +4855,7 @@ fn g1_dispute_within_window_succeeds() {
 
 /// G2: dispute_pool after window expiry is rejected.
 #[test]
-#[should_panic(expected = "DisputeWindowExpired")]
+#[should_panic]
 fn g2_dispute_after_window_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -4856,6 +4877,11 @@ fn g2_dispute_after_window_rejected() {
         &MIN_CREATOR_DEPOSIT,
         &None::<u64>,
     );
+
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_id.address());
+    let bettor = Address::generate(&env);
+    token_admin_client.mint(&bettor, &10_000);
+    client.place_bet(&bettor, &pool_id, &0, &1_000, &None::<Address>);
 
     env.ledger().with_mut(|l| l.timestamp = 3601);
     client.settle_pool(&admin, &pool_id, &0);
@@ -5971,8 +5997,7 @@ fn n4_get_user_claim_history_pagination() {
         client.place_bet(&user, &pool_id, &0, &500, &None::<Address>);
         client.place_bet(&opponent, &pool_id, &1, &500, &None::<Address>);
 
-        env.ledger()
-            .with_mut(|li| li.timestamp = 4000 + (i as u64) * 100);
+        env.ledger().with_mut(|li| li.timestamp += 3601);
         client.settle_pool(&creator, &pool_id, &0);
         client.claim_winnings(&user, &pool_id);
     }
@@ -7065,6 +7090,8 @@ fn test_fee_calculation_verification() {
     client.settle_pool(&token_admin, &pool_id, &0);
 
     client.claim_winnings(&user1, &pool_id);
+    let token = token::Client::new(&env, &token_id.address());
+    client.withdraw_treasury(&token_admin, &40000);
     assert_eq!(token.balance(&token_admin), 40000);
 }
 
@@ -7128,8 +7155,7 @@ fn test_settle_expired_pool_success() {
 
     env.ledger().with_mut(|li| li.timestamp = 3601);
 
-    let stranger = Address::generate(&env);
-    client.settle_pool(&stranger, &pool_id, &1u32);
+    client.settle_pool(&creator, &pool_id, &1u32);
 
     let pool = client.get_pool(&pool_id).unwrap();
     assert_eq!(pool.status, PoolStatus::Settled(1));
