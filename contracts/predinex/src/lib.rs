@@ -125,6 +125,8 @@ pub enum DataKey {
     PoolTemplateId(u32),
     /// #176 — who triggered settlement for this pool (Creator or Operator).
     PoolSettlementSource(u32),
+    /// Pre-dispute status stored prior to pool dispute transition.
+    PoolPreDisputeStatus(u32),
     /// Maximum allowed total pool size. 0 disables the cap.
     MaxPoolSize,
     /// Threshold at/above which the pool enters automatic cooling. 0 disables.
@@ -318,8 +320,6 @@ const MAX_WEBHOOK_URL_LENGTH: u32 = 512;
 const MIN_POOL_DURATION_SECS: u64 = 300;
 /// #151 — Maximum pool lifetime in seconds (matches web validators / tests).
 const MAX_POOL_DURATION_SECS: u64 = 31_536_000;
-/// #570 — Maximum pool lifetime in seconds (~1 year).
-const MAX_POOL_DURATION_SECS: u64 = 31_536_000;
 /// Maximum duration a single `extend_pool_duration` call may add (30 days).
 ///
 /// The total-lifetime cap (`MAX_POOL_DURATION_SECS`) already bounds how far a
@@ -499,6 +499,8 @@ pub enum ContractError {
     InvalidDepositDeadline = 84,
     DepositDeadlinePassed = 85,
     LargeBetCooldownActive = 86,
+    /// On-ledger token balance is less than required obligation/payout.
+    BalanceShortfall = 87,
 }
 
 /// #176 — Settlement source tag indicating who initiated pool settlement.
@@ -6011,6 +6013,9 @@ impl PredinexContract {
         if pool.status == PoolStatus::Frozen {
             return Err(ContractError::PoolIsFrozen);
         }
+        if pool.status == PoolStatus::Disputed {
+            return Err(ContractError::PoolIsDisputed);
+        }
 
         pool.status = PoolStatus::Frozen;
         env.storage()
@@ -6069,6 +6074,10 @@ impl PredinexContract {
             .get::<_, Pool>(&DataKey::Pool(pool_id))
             .ok_or(ContractError::PoolNotFound)?;
 
+        if pool.status == PoolStatus::Frozen {
+            return Err(ContractError::PoolIsFrozen);
+        }
+
         if !matches!(pool.status, PoolStatus::Settled(_)) {
             return Err(ContractError::PoolMustBeSettledToDispute);
         }
@@ -6094,6 +6103,10 @@ impl PredinexContract {
                 return Err(ContractError::DisputeWindowExpired);
             }
         }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PoolPreDisputeStatus(pool_id), &pool.status);
 
         pool.status = PoolStatus::Disputed;
         env.storage()
@@ -6132,7 +6145,20 @@ impl PredinexContract {
             return Err(ContractError::PoolNotFrozenOrDisputed);
         }
 
-        pool.status = PoolStatus::Open;
+        if pool.status == PoolStatus::Disputed {
+            let pre_status = env
+                .storage()
+                .persistent()
+                .get::<_, PoolStatus>(&DataKey::PoolPreDisputeStatus(pool_id))
+                .unwrap_or(PoolStatus::Open);
+            pool.status = pre_status;
+            env.storage()
+                .persistent()
+                .remove(&DataKey::PoolPreDisputeStatus(pool_id));
+        } else {
+            pool.status = PoolStatus::Open;
+        }
+
         env.storage()
             .persistent()
             .remove(&DataKey::PoolCoolingUntil(pool_id));
@@ -6952,6 +6978,7 @@ impl PredinexContract {
         let outcomes = overrides.outcomes.unwrap_or(template.outcomes);
         let duration = overrides.duration.unwrap_or(template.duration);
         let metadata_uri = overrides.metadata_uri.or(template.metadata_uri);
+        Self::validate_outcomes(&env, &outcomes)?;
         let pool_id = Self::create_pool_internal(
             &env,
             creator,
@@ -8436,6 +8463,10 @@ impl PredinexContract {
             }
             let payout_t = net_t * user_norm_winning / total_norm_winning;
             if payout_t > 0 {
+                let actual_balance = token::Client::new(&env, &tok).balance(&env.current_contract_address());
+                if actual_balance < payout_t {
+                    return Err(ContractError::BalanceShortfall);
+                }
                 token::Client::new(&env, &tok).transfer(
                     &env.current_contract_address(),
                     &user,

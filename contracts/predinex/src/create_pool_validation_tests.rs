@@ -11,6 +11,11 @@ fn setup() -> (Env, PredinexContractClient<'static>) {
     env.mock_all_auths();
     let contract_id = env.register(PredinexContract, ());
     let client: PredinexContractClient<'static> = PredinexContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    client.initialize(&token, &admin, &admin);
     (env, client)
 }
 
