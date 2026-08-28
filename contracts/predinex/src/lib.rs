@@ -1796,6 +1796,7 @@ impl PredinexContract {
     /// single outcome-to-token payout. Equivalent to `compute_winnings` but
     /// exposed as a named helper so multi-asset per-token math can reuse it
     /// without duplicating the fee-then-divide sequence.
+    #[allow(dead_code)]
     fn compute_payout_for_outcome(
         user_stake: i128,
         total_for_token: i128,
@@ -2334,14 +2335,18 @@ impl PredinexContract {
                 .checked_add(amount)
                 .ok_or(ContractError::PoolTotalOverflow)?;
 
-            // Get pool total volume
+            // Use the per-outcome vector so multi-outcome pools do not rely on
+            // legacy binary mirrors.
             let pool: Pool = env
                 .storage()
                 .persistent()
                 .get(&DataKey::Pool(pool_id))
                 .ok_or(ContractError::PoolNotFound)?;
-            let pool_volume = pool.total_a + pool.total_b;
-            let max_exposure = (pool_volume * config.max_exposure_per_pool_bps as i128) / 10_000;
+            let pool_volume = Self::sum_totals(&Self::read_outcome_totals(env, pool_id, &pool))?;
+            let max_exposure = pool_volume
+                .checked_mul(config.max_exposure_per_pool_bps as i128)
+                .ok_or(ContractError::PoolTotalOverflow)?
+                / 10_000;
 
             if max_exposure > 0 && new_exposure > max_exposure {
                 env.events().publish(
@@ -2743,7 +2748,7 @@ impl PredinexContract {
         if outcome >= totals.len() {
             return Err(ContractError::InvalidOutcome);
         }
-        if totals.len() == 0 {
+        if totals.is_empty() {
             return Err(ContractError::InvalidOutcome);
         }
 
@@ -2831,7 +2836,7 @@ impl PredinexContract {
     }
 
     fn cumulative_at(snapshots: &Vec<TwapSnapshot>, target: u64) -> Option<i128> {
-        if snapshots.len() == 0 {
+        if snapshots.is_empty() {
             return None;
         }
 
@@ -3757,7 +3762,7 @@ impl PredinexContract {
             .checked_sub(fee_amount)
             .ok_or(ContractError::InvalidBetAmount)?;
 
-        token_client.transfer(&user, &env.current_contract_address(), &amount);
+        token_client.transfer(&user, env.current_contract_address(), &amount);
         if fee_amount > 0 {
             token_client.transfer(&env.current_contract_address(), &fee_recipient, &fee_amount);
         }
@@ -3775,7 +3780,7 @@ impl PredinexContract {
                 .total_a
                 .checked_add(net_amount)
                 .ok_or(ContractError::PoolTotalOverflow)?;
-        } else {
+        } else if outcome == 1 {
             pool.total_b = pool
                 .total_b
                 .checked_add(net_amount)
@@ -3853,7 +3858,7 @@ impl PredinexContract {
                 .amount_a
                 .checked_add(net_amount)
                 .ok_or(ContractError::UserBetOverflow)?;
-        } else {
+        } else if outcome == 1 {
             user_bet.amount_b = user_bet
                 .amount_b
                 .checked_add(net_amount)
@@ -4291,8 +4296,8 @@ impl PredinexContract {
                 .ok_or(ContractError::InvalidBetAmount)?,
         );
 
-        // Mirror `place_bet`: outcome 0 maps to total_a, every other outcome to
-        // total_b, so cancellation exactly undoes what the bet added.
+        // Mirror the legacy binary fields only for the first two outcomes.
+        // Full multi-outcome accounting lives in PoolOutcomeTotals.
         if outcome == 0 {
             pool.total_a = pool
                 .total_a
@@ -4302,7 +4307,7 @@ impl PredinexContract {
                 .amount_a
                 .checked_sub(amount)
                 .ok_or(ContractError::InvalidBetAmount)?;
-        } else {
+        } else if outcome == 1 {
             pool.total_b = pool
                 .total_b
                 .checked_sub(amount)
@@ -4387,9 +4392,8 @@ impl PredinexContract {
     /// Cancel a pool and refund all participants.
     ///
     /// Allows:
-    /// 1. The creator to cancel the pool before expiry (if status is Open).
+    /// 1. The creator to cancel the pool while status is Open.
     /// 2. The admin to cancel the pool at any time (emergency cancel).
-    /// 3. Anyone to trigger cancellation after expiry if the pool hasn't been settled.
     pub fn cancel_pool(
         env: Env,
         caller: Address,
@@ -4428,11 +4432,7 @@ impl PredinexContract {
         let admin = Self::get_admin(env.clone());
         let is_admin = admin.is_some() && admin.unwrap() == caller;
         let is_creator = pool.creator == caller;
-        let is_expired = env.ledger().timestamp() > pool.expiry;
-
-        let auth_ok = is_admin
-            || (is_creator && pool.status == PoolStatus::Open)
-            || (is_expired && pool.status == PoolStatus::Open);
+        let auth_ok = is_admin || (is_creator && pool.status == PoolStatus::Open);
 
         if !auth_ok {
             return Err(ContractError::Unauthorized);
@@ -5380,8 +5380,14 @@ impl PredinexContract {
             .unwrap_or_default();
 
         let is_first_claim = !payout_state.fee_credited;
-        let new_claimed_winning_stake = payout_state.claimed_winning_stake + user_winning_bet;
-        let new_paid_out = payout_state.paid_out + winnings;
+        let new_claimed_winning_stake = payout_state
+            .claimed_winning_stake
+            .checked_add(user_winning_bet)
+            .ok_or(ContractError::PoolTotalOverflow)?;
+        let new_paid_out = payout_state
+            .paid_out
+            .checked_add(winnings)
+            .ok_or(ContractError::PoolTotalOverflow)?;
         let is_final_claim = new_claimed_winning_stake == pool_winning_total;
 
         // The dust is the residual of the floor-division payouts. By
@@ -5390,7 +5396,9 @@ impl PredinexContract {
         // claim so reconciliation `total_pool_balance == fee + dust + sum(payouts)`
         // holds the moment the last winner withdraws.
         let payout_dust: i128 = if is_final_claim {
-            net_pool_balance - new_paid_out
+            net_pool_balance
+                .checked_sub(new_paid_out)
+                .ok_or(ContractError::PoolTotalOverflow)?
         } else {
             0
         };
@@ -5401,7 +5409,12 @@ impl PredinexContract {
         // record is already gone, preventing any retry that could double-claim.
 
         // Credit the treasury ledger (fee on first claim, dust on final claim).
-        let treasury_delta = (if is_first_claim { fee } else { 0 }) + payout_dust;
+        let treasury_delta = if is_first_claim {
+            fee.checked_add(payout_dust)
+                .ok_or(ContractError::TreasuryOverflow)?
+        } else {
+            payout_dust
+        };
         if treasury_delta > 0 {
             let current_treasury: i128 = env
                 .storage()
@@ -5486,9 +5499,10 @@ impl PredinexContract {
         // Step 5: update user analytics.
         let total_key = DataKey::UserTotalClaimed(analytics_user.clone());
         let prev_total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&total_key, &(prev_total + winnings));
+        let next_total = prev_total
+            .checked_add(winnings)
+            .ok_or(ContractError::PoolTotalOverflow)?;
+        env.storage().persistent().set(&total_key, &next_total);
 
         let history_key = DataKey::UserClaimHistory(analytics_user.clone());
         let mut history: Vec<UserClaimEntry> = env
@@ -7411,6 +7425,7 @@ impl PredinexContract {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn require_admin(env: &Env, caller: &Address) -> Result<(), ContractError> {
         let admin: Address = env
             .storage()
@@ -8448,7 +8463,7 @@ impl PredinexContract {
         // Transfer bet_token from user to contract.
         token::Client::new(&env, &bet_token).transfer(
             &user,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &amount,
         );
 
@@ -8549,7 +8564,7 @@ impl PredinexContract {
                 .amount_a
                 .checked_add(normalized)
                 .ok_or(ContractError::UserBetOverflow)?;
-        } else {
+        } else if outcome == 1 {
             user_bet.amount_b = user_bet
                 .amount_b
                 .checked_add(normalized)
@@ -8826,7 +8841,9 @@ impl PredinexContract {
                     &user,
                     &payout_t,
                 );
-                total_norm_paid += payout_t;
+                total_norm_paid = total_norm_paid
+                    .checked_add(payout_t)
+                    .ok_or(ContractError::PoolTotalOverflow)?;
                 per_asset.push_back(AssetClaimEntry {
                     token: tok.clone(),
                     amount: payout_t,
@@ -8866,14 +8883,18 @@ impl PredinexContract {
                     .persistent()
                     .get(&DataKey::PoolTokenFeePending(pool_id, tok.clone()))
                     .unwrap_or(0);
-                let net_t = deposit - fee_t;
+                let net_t = deposit
+                    .checked_sub(fee_t)
+                    .ok_or(ContractError::PoolTotalOverflow)?;
                 if net_t <= 0 {
                     continue;
                 }
                 let token_bal =
                     token::Client::new(&env, &tok).balance(&env.current_contract_address());
                 let dust = if token_bal > fee_t {
-                    token_bal - fee_t
+                    token_bal
+                        .checked_sub(fee_t)
+                        .ok_or(ContractError::PoolTotalOverflow)?
                 } else {
                     0
                 };
@@ -8886,9 +8907,10 @@ impl PredinexContract {
                     let credit_key = DataKey::PoolTreasuryCredited(pool_id);
                     let prev_credit: i128 =
                         env.storage().persistent().get(&credit_key).unwrap_or(0);
-                    env.storage()
-                        .persistent()
-                        .set(&credit_key, &(prev_credit + dust));
+                    let next_credit = prev_credit
+                        .checked_add(dust)
+                        .ok_or(ContractError::TreasuryOverflow)?;
+                    env.storage().persistent().set(&credit_key, &next_credit);
                     env.storage().persistent().extend_ttl(
                         &credit_key,
                         POOL_BUMP_THRESHOLD,
@@ -8925,9 +8947,10 @@ impl PredinexContract {
 
         let total_key = DataKey::UserTotalClaimed(analytics_user.clone());
         let prev_total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&total_key, &(prev_total + total_norm_paid));
+        let next_total = prev_total
+            .checked_add(total_norm_paid)
+            .ok_or(ContractError::PoolTotalOverflow)?;
+        env.storage().persistent().set(&total_key, &next_total);
 
         let history_key = DataKey::UserClaimHistory(analytics_user.clone());
         let mut history: Vec<UserClaimEntry> = env
@@ -9365,7 +9388,7 @@ impl PredinexContract {
     ) -> Result<(), ContractError> {
         caller.require_auth();
         Self::require_treasury_recipient(&env, &caller)?;
-        if boost_bps < 10_000 || boost_bps > 50_000 {
+        if !(10_000..=50_000).contains(&boost_bps) {
             return Err(ContractError::FeeOutOfBounds);
         }
         env.storage()
@@ -9401,7 +9424,7 @@ impl PredinexContract {
             .ok_or(ContractError::NotInitialized)?;
         token::Client::new(&env, &token_address).transfer(
             &user,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &amount,
         );
 
@@ -9953,7 +9976,7 @@ impl PredinexContract {
             .ok_or(ContractError::NotInitialized)?;
         token::Client::new(&env, &token_address).transfer(
             &caller,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &amount,
         );
         let scaled_amount = amount
